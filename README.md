@@ -12,6 +12,8 @@ Handles the following cases of query processing:
   - SELECT select from A;
   - SELECT * from table1,table2 WHERE A = "234" OR (B=23 AND C=D);
   - SELECT *,A from A,B WHERE A = 234;
+  - SELECT * from table1 as table2;
+- Handle table alaising
 - Pretty Table output
 - Summary of successful query
 
@@ -20,4 +22,3 @@ Handles the following cases of query processing:
 
 
 <!-- - Differenet character types -->
-handle alaising

@@ -8,6 +8,7 @@ import sys
 from prettytable import PrettyTable
 import time
 from ColorizePython import pycolors
+from copy import deepcopy
 
 DATASET_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data/")
 
@@ -38,11 +39,15 @@ def handle_query(query):
             if stage == "SELECT":
                 columns.append(clean(line[-1].strip(",")))
             elif stage == "FROM":
-                tables.append(clean(line[-1].strip(",")))
+                if line[0] == "FROM":
+                    tables.append(clean(" ".join(line[1:]).strip(",")))
+                else:
+                    tables.append(clean(" ".join(line).strip(",")))
             elif stage == "WHERE":
-                if line[0] != "WHERE":
-                    conditionals.append(line[0])
-                conditionals.append(" ".join(line[1:]))
+                if line[0] == "WHERE":
+                    conditionals.append("".join(line[1:]))
+                else:
+                    conditionals.append("".join(line))
             else:
                 raise MyException("InvalidQueryLanguage")
 
@@ -53,9 +58,18 @@ def handle_query(query):
 
 
         # Verify table names
+        new_tables = []
         for tab in tables:
             if tab not in schema.keys():
-                raise MyException('TableNotPresentInDatabase')
+                # Check and Handle aliases
+                tab = tab.split()
+                if len(tab) == 3 and (tab[0] in schema.keys()) and tab[1].lower() == "as":
+                    create_table_alias(tab[0], tab[2])
+                    tab = tab[2]
+                else:
+                    raise MyException('TableNotPresentInDatabase')
+            new_tables.append(tab)
+        tables = new_tables
 
         # Check conflicting column names
         new_columns = []
@@ -150,7 +164,7 @@ def handle_query(query):
 
 
 def output(new_schema, columns, final_dataset):
-    # import pdb; pdb.set_trace()
+    """ Create a pretty table output similar to SQL """
     x = PrettyTable()
     x.field_names = []
     if "*" in columns:
@@ -165,8 +179,26 @@ def output(new_schema, columns, final_dataset):
         x.add_row([row[field] for field in x.field_names])
     print x
 
-def output_summary(final_dataset):
-    print pycolors.OKGREEN+pycolors.BOLD, len(final_dataset), "records generated in", time.time() - start_time, "seconds", pycolors.ENDC
+
+def output_summary(received_dataset):
+    print pycolors.OKGREEN+pycolors.BOLD, len(received_dataset), "records generated in", time.time() - start_time, "seconds", pycolors.ENDC
+
+
+def create_table_alias(table_name, alias_name):
+    """ Create a table alias by copying the dataset and the table schema """
+    global dataset, schema
+    if alias_name in schema.keys():
+        raise MyException('CannotCreateAliasWithAlreadyExistingTableName')
+
+    # Copy schema
+    schema[alias_name] = tuple([".".join([alias_name, col.split(".")[1]]) for col in schema[table_name]])
+
+    # Copy Dataset
+    dataset[alias_name] = deepcopy(dataset[table_name])
+    for row in dataset[alias_name]:
+        for (key, val) in row.items():
+            row[".".join([alias_name, key.split(".")[1]])] = deepcopy(row[key])
+            del row[key]
 
 
 def get_tables_generic_name(table_name, tables):
