@@ -3,7 +3,6 @@ import sqlparse
 from collections import defaultdict
 import os
 import re
-# from freezer import freeze
 import sys
 from prettytable import PrettyTable
 import time
@@ -16,9 +15,28 @@ schema = {}
 dataset = defaultdict(list)
 start_time = 0
 
+AGGREGATE_FUNCTIONS = ("distinct", "avg", "max", "min", "sum")
 
 class MyException(Exception):
     pass
+
+
+def get_aggregate_function(col, tables):
+    """ Returns the extracted function from the column with the column name
+        Returns: column_name, function_name
+    """
+    count = []
+    function = None
+    for func in AGGREGATE_FUNCTIONS:
+        reg = re.compile(r'(%s)\(([a-zA-Z]{1,})\)' %(func))
+        col2 = re.sub(reg, r'\2', col)
+        function = func
+        if col != col2:
+            break
+    if col == col2:
+        return col, None
+
+    return get_tables_generic_name(col2, tables), function
 
 
 def handle_query(query):
@@ -29,6 +47,8 @@ def handle_query(query):
         columns = []
         tables = []
         conditionals = []
+        aggregate_functions_map = []    # of the format [(col1, distinct), (col2, sum)]
+
 
         # Parse query into logic ends
         for line in query.split("\n"):
@@ -47,7 +67,7 @@ def handle_query(query):
                 if line[0] == "WHERE":
                     conditionals.append("".join(line[1:]))
                 else:
-                    conditionals.append("".join(line))
+                    conditionals.append(" ".join(line))
             else:
                 raise MyException("InvalidQueryLanguage")
 
@@ -84,8 +104,12 @@ def handle_query(query):
                 if len(count) > 1:
                     raise MyException('ColumnNameConflict')
                 elif len(count) == 0:
-                    raise MyException('ColumnNotPresentInTable')
-                col = count[0] + "." + col
+                    col, func = get_aggregate_function(col, tables)
+                    if not func:
+                        raise MyException('ColumnNotPresentInTable')
+                    aggregate_functions_map.append((col, func))
+                else:
+                    col = count[0] + "." + col
             else:
                 if col not in schema[table]:
                     raise MyException('ColumnNotPresentInTable')
@@ -143,13 +167,12 @@ def handle_query(query):
 
     except Exception as e:
         # Raise exception for the next parent catch block.
-        raise e
+        # raise e
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+        print "ERROR:", str(exc_type), "on", exc_tb.tb_lineno
 
-        # exc_type, exc_obj, exc_tb = sys.exc_info()
-        # fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-        # print "ERROR:", str(exc_type), "on", exc_tb.tb_lineno
-
-    return new_schema, columns, final_dataset
+    return new_schema, columns, final_dataset, aggregate_functions_map
     # Look for conditionals that can reduce computation !!
     # for condition in conditionals:
     #     if len(condition) <= 1:
@@ -163,21 +186,63 @@ def handle_query(query):
     # Re-parse columns, i.e. *, conflicts etc
 
 
-def output(new_schema, columns, final_dataset):
-    """ Create a pretty table output similar to SQL """
-    x = PrettyTable()
-    x.field_names = []
-    if "*" in columns:
-        x.field_names += list(new_schema)
-    else:
-        for col in columns:
-            if col == "*":
+def process_aggregate_function(agg_col, agg_func, final_dataset, new_schema):
+    """
+        Processes the aggregate function and modifies the final_dataset as per the need.
+        Returns: new_schema, processed_final_dataset
+    """
+    new_col_name = agg_func + "(" + agg_col + ")"
+    if agg_func == "sum":
+        s = sum(row[agg_col] for row in final_dataset)
+        final_dataset = [{new_col_name: s}]
+        return [new_col_name], final_dataset
+    elif agg_func == "avg":
+        s = 1.0 * sum(row[agg_col] for row in final_dataset) / len(final_dataset)
+        final_dataset = [{new_col_name: s}]
+        return [new_col_name], final_dataset
+    elif agg_func == "max":
+        s = max(row[agg_col] for row in final_dataset)
+        final_dataset = [{new_col_name: s}]
+        return [new_col_name], final_dataset
+    elif agg_func == "min":
+        s = min(row[agg_col] for row in final_dataset)
+        final_dataset = [{new_col_name: s}]
+        return [new_col_name], final_dataset
+    elif agg_func == "distinct":
+        distinct = []
+        new_data = []
+        for row in final_dataset:
+            if row[agg_col] in distinct:
                 continue
-            x.field_names += [col]
+            distinct.append(row[agg_col])
+            row[new_col_name] = row.pop(agg_col)
+            new_data.append(row)
+        return [new_col_name if col == agg_col else col for col in new_schema], new_data
+    else:
+        raise MyException('CannotProcessTheAggregateFunction')
 
+
+def output(new_schema, aggregate_functions_map, columns, final_dataset):
+    """ Create a pretty table output similar to SQL """
+    field_names = []
+    if "*" in columns:
+        field_names = list(new_schema)
+    else:
+        if len(aggregate_functions_map) >= 1:
+            if len(aggregate_functions_map) > 1:
+                print aggregate_functions_map
+                raise MyException('MultipleAggregateFunctionNotAllowed')
+            (agg_col, agg_func) = aggregate_functions_map[0]
+            aggregate_functions_dict = dict(aggregate_functions_map)
+            field_names, final_dataset = process_aggregate_function(agg_col, agg_func, final_dataset, new_schema)
+        else:
+            field_names = [col for col in columns if col != "*"]
+
+    x = PrettyTable(field_names)
     for row in final_dataset:
         x.add_row([row[field] for field in x.field_names])
     print x
+    return final_dataset
 
 
 def output_summary(received_dataset):
@@ -201,21 +266,21 @@ def create_table_alias(table_name, alias_name):
             del row[key]
 
 
-def get_tables_generic_name(table_name, tables):
+def get_tables_generic_name(column_name, tables):
     """
-    Converts the table names from "col" to "table.col"
+    Converts the column names from "col" to "table.col"
     """
-    if "." in table_name:   # No need to change as the name is already generic
-        return table_name
+    if "." in column_name:   # No need to change as the name is already generic
+        return column_name
     found = []
     for table in tables:
-        if ".".join([table, table_name]) in schema[table]:
+        if ".".join([table, column_name]) in schema[table]:
             found.append(table)
     if len(found) == 0:
         raise MyException('ColumnNotPresentInAnyTable')
     elif len(found) > 1:
         raise MyException('ColumnNameConflict')
-    return ".".join([found[0], table_name])
+    return ".".join([found[0], column_name])
 
 
 def create_tables(filename):
@@ -239,19 +304,37 @@ def create_tables(filename):
                     schema[table_found] += (table_found + "." + row,)
 
 
-def load_data(filename):
-    filename = filename.split(".")
-    if filename[1] != "csv":
-        raise MyException('NotATableFile')
-    tablename = filename[0]
-    with open(DATASET_PATH + ".".join(filename), "r") as f:
-        for row in f.readlines():
-            if len(row) < 0:
+def load_data(filename=None):
+    """ Load the data from the particular file.
+        If the filename is not given then all the tables in the "data" folder are loaded.
+    """
+    # Load all the files if no file is given
+    files = []
+    if not filename:
+        for filename in os.listdir(DATASET_PATH):
+            filename = filename.split(".")
+            if len(filename) != 2:
                 continue
-            split_row = row.split(",")
-            if len(split_row) != len(schema[tablename]):
-                raise MyException('NoOfColumnsDifferentInInputFile')
-            dataset[tablename].append(dict((column, int(clean(value)) if len(clean(value)) > 0 else 0) for i, (column, value) in enumerate(zip(schema[tablename], split_row))))
+            if filename[1] == "csv" and filename[0] in schema.keys():
+                files.append(".".join(filename))
+    else:
+        files.append(filename)
+
+    # Load data from all the files
+    for filename in files:
+        print "Loading data from: %s" %(filename)
+        filename = filename.split(".")
+        if filename[1] != "csv":
+            raise MyException('NotATableFile')
+        tablename = filename[0]
+        with open(DATASET_PATH + ".".join(filename), "r") as f:
+            for row in f.readlines():
+                if len(row) < 0:
+                    continue
+                split_row = row.split(",")
+                if len(split_row) != len(schema[tablename]):
+                    raise MyException('NoOfColumnsDifferentInInputFile')
+                dataset[tablename].append(dict((column, int(clean(value)) if len(clean(value)) > 0 else 0) for i, (column, value) in enumerate(zip(schema[tablename], split_row))))
 
 
 def clean(s):
@@ -262,15 +345,14 @@ def clean(s):
 
 if __name__ == "__main__":
     create_tables("metadata.txt")
-    # schema = freeze(schema)
 
-    load_data("table1.csv")
-    load_data("table2.csv")
-    # dataset = freeze(dataset)
+    # load_data("table1.csv")
+    # load_data("table2.csv")
+    load_data()
 
     while True:
         try:
-            command = raw_input(">> ")
+            command = raw_input(">> ").strip()
             start_time = time.time()
             if command.lower() == "exit" or command.lower() == "exit;":
                 break
@@ -279,8 +361,8 @@ if __name__ == "__main__":
             command = command[:-1]
             command = sqlparse.format(command, reindent=True, keyword_case='upper')
 
-            new_schema, columns, final_dataset = handle_query(command)
-            output(new_schema, columns, final_dataset)
+            new_schema, columns, final_dataset, aggregate_functions_map = handle_query(command)
+            final_dataset = output(new_schema, aggregate_functions_map, columns, final_dataset)
             output_summary(final_dataset)
         except EOFError:
             print ""

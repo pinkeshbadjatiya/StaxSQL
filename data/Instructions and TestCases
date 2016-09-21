@@ -1,0 +1,18 @@
+Instructions:
+Before coming to the evaluation run the following queries. PLEASE KEEP THE ANSWERS IN THE TERMINAL.
+
+1. select * from table1
+2. select max(A) from table1
+3. select min(B) from table1
+4. select avg(C) from table1
+5. select sum(D) from table2
+6. select A from table1
+7. select A,D from table1,table2
+8. select distinct(C) from table3
+9. select B,C from table1 where A=-900
+10. select A,B from table1 where A=775 OR B=803
+11. select A,B from table1 where A=922 OR B=158;
+12. select * from table1,table2 where table1.B=table2.B
+13. select A,D from table1,table2 where table1.B=table2.B
+14. Select A from table4;
+15. Select Z from table1;

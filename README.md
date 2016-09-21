@@ -13,10 +13,11 @@ Handles the following cases of query processing:
   - SELECT * from table1,table2 WHERE A = "234" OR (B=23 AND C=D);
   - SELECT *,A from A,B WHERE A = 234;
   - SELECT * from table1 as table2;
-- Handle table alaising
+- Aggregate function like, (distinct, sum, min, max, avg)
 - Pretty Table output
 - Summary of successful query
 
+- Handle table alaising
 
 
 
